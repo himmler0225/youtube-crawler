@@ -1,6 +1,7 @@
 from typing import List, Dict
 from ..utils import get_context, get_youtube_api_key, create_httpx_client
 from ..config import get_youtube_headers, get_youtube_api_url
+from ..config.constants import ENDPOINT_SEARCH, SEARCH_FILTER_LIVE
 from ..exceptions import YouTubeStructureChangedError
 
 def extract_live_videos(items: List[Dict]) -> List[Dict]:
@@ -26,8 +27,8 @@ def extract_live_videos(items: List[Dict]) -> List[Dict]:
     return videos
 
 async def get_all_live_videos(q: str, proxy: str = None, max_results: int = 100) -> List[Dict]:
-    API_KEY = await get_youtube_api_key()
-    SEARCH_URL = get_youtube_api_url("search", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    SEARCH_URL = get_youtube_api_url(ENDPOINT_SEARCH, API_KEY)
     headers = get_youtube_headers()
 
     collected = []
@@ -37,7 +38,7 @@ async def get_all_live_videos(q: str, proxy: str = None, max_results: int = 100)
         payload = {
             "context": get_context(),
             "query": q,
-            "params": "EgJAAQ%3D%3D"
+            "params": SEARCH_FILTER_LIVE
         }
         resp = await client.post(SEARCH_URL, json=payload)
         resp.raise_for_status()

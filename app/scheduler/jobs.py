@@ -1,18 +1,14 @@
-# TODO: Connect database to persist crawl results (currently only logging)
-
 import asyncio
 from datetime import datetime
 from typing import Any, Callable, Coroutine
-from app.services.trending import get_trending_videos
+from app.services.location import get_all_location_videos
 from app.services.search import search_youtube
 from app.exceptions import YouTubeStructureChangedError
-from app.config import get_proxy
 from app.config.logging_config import get_logger
+from app.config.urls import proxy_manager
 from app import ingest_client
 
 logger = get_logger(__name__)
-
-PROXY_URL = get_proxy()
 
 # Circuit breaker: if a job fails MAX_CONSECUTIVE_FAILURES times in a row,
 # skip future runs and log CRITICAL to alert the developer.
@@ -64,14 +60,56 @@ def _record_failure(job_id: str) -> int:
     return count
 
 
-async def crawl_trending_videos():
-    """
-    Crawl video trending từ YouTube — chạy hằng ngày lúc 06:00
-    Lấy tối đa 100 video thuộc danh mục music (có thể cấu hình thêm)
-    """
-    job_id = "crawl_trending"
+# Major cities worldwide — one representative point per country/region
+# Each city crawled with radius 50km, step 25km (~9 grid points each)
+LOCATION_TARGETS = [
+    # Southeast Asia
+    {"name": "Hanoi",       "lat": 21.0285,  "lng": 105.8542},
+    {"name": "Ho Chi Minh", "lat": 10.8231,  "lng": 106.6297},
+    {"name": "Bangkok",     "lat": 13.7563,  "lng": 100.5018},
+    {"name": "Jakarta",     "lat": -6.2088,  "lng": 106.8456},
+    {"name": "Singapore",   "lat": 1.3521,   "lng": 103.8198},
+    {"name": "Manila",      "lat": 14.5995,  "lng": 120.9842},
+    {"name": "Kuala Lumpur","lat": 3.1390,   "lng": 101.6869},
+    # East Asia
+    {"name": "Tokyo",       "lat": 35.6762,  "lng": 139.6503},
+    {"name": "Seoul",       "lat": 37.5665,  "lng": 126.9780},
+    {"name": "Beijing",     "lat": 39.9042,  "lng": 116.4074},
+    {"name": "Shanghai",    "lat": 31.2304,  "lng": 121.4737},
+    # South Asia
+    {"name": "Mumbai",      "lat": 19.0760,  "lng": 72.8777},
+    {"name": "Delhi",       "lat": 28.6139,  "lng": 77.2090},
+    # Middle East
+    {"name": "Dubai",       "lat": 25.2048,  "lng": 55.2708},
+    {"name": "Cairo",       "lat": 30.0444,  "lng": 31.2357},
+    # Europe
+    {"name": "London",      "lat": 51.5074,  "lng": -0.1278},
+    {"name": "Paris",       "lat": 48.8566,  "lng": 2.3522},
+    {"name": "Berlin",      "lat": 52.5200,  "lng": 13.4050},
+    {"name": "Moscow",      "lat": 55.7558,  "lng": 37.6176},
+    # North America
+    {"name": "New York",    "lat": 40.7128,  "lng": -74.0060},
+    {"name": "Los Angeles", "lat": 34.0522,  "lng": -118.2437},
+    {"name": "Toronto",     "lat": 43.6532,  "lng": -79.3832},
+    {"name": "Mexico City", "lat": 19.4326,  "lng": -99.1332},
+    # South America
+    {"name": "Sao Paulo",   "lat": -23.5505, "lng": -46.6333},
+    {"name": "Buenos Aires","lat": -34.6037, "lng": -58.3816},
+    # Africa
+    {"name": "Lagos",       "lat": 6.5244,   "lng": 3.3792},
+    {"name": "Johannesburg","lat": -26.2041, "lng": 28.0473},
+    # Oceania
+    {"name": "Sydney",      "lat": -33.8688, "lng": 151.2093},
+]
 
-    # Circuit breaker: ngừng chạy nếu đã fail quá nhiều lần liên tiếp
+
+async def crawl_location_videos():
+    """
+    Crawl video theo vị trí địa lý — chạy hằng ngày lúc 06:00.
+    Duyệt qua danh sách thành phố lớn toàn cầu, mỗi thành phố lấy tối đa 50 video.
+    """
+    job_id = "crawl_location"
+
     if _is_circuit_open(job_id):
         logger.critical(
             f"Job '{job_id}' is disabled after {MAX_CONSECUTIVE_FAILURES} "
@@ -80,54 +118,74 @@ async def crawl_trending_videos():
         return {"success": False, "error": "circuit_open"}
 
     try:
-        logger.info("Starting scheduled trending videos crawl...")
+        logger.info(f"Starting location crawl for {len(LOCATION_TARGETS)} cities...")
         start_time = datetime.now()
 
-        # Retry tối đa 3 lần cho lỗi mạng; không retry nếu cấu trúc thay đổi
-        trending = await _with_retry(
-            get_trending_videos,
-            max_results=100,
-            proxy=PROXY_URL,
-        )
+        total_videos = 0
+        skipped = []
+
+        for target in LOCATION_TARGETS:
+            city = target["name"]
+            try:
+                proxy = await proxy_manager.get_proxy()
+                videos = await _with_retry(
+                    get_all_location_videos,
+                    center_lat=target["lat"],
+                    center_lng=target["lng"],
+                    proxy=proxy,
+                    step_km=25,
+                    radius_km=50,
+                    max_results_per_loc=20,
+                )
+
+                if videos:
+                    await ingest_client.ingest_trending(videos=videos, category=city)
+                    total_videos += len(videos)
+                    logger.info(f"[{city}] crawled {len(videos)} videos")
+
+                await asyncio.sleep(3)
+
+            except YouTubeStructureChangedError:
+                raise
+
+            except Exception as e:
+                logger.warning(f"[{city}] skipped after retries: {e!r}")
+                skipped.append(city)
 
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 
-        # Đẩy data vào API — không raise nếu thất bại, sẽ crawl lại lần sau
-        await ingest_client.ingest_trending(videos=trending, category="Now")
-
         _record_success(job_id)
         logger.info(
-            "Trending videos crawl completed successfully",
+            "Location crawl completed",
             extra={
                 "extra_data": {
-                    "videos_count": len(trending),
+                    "cities": len(LOCATION_TARGETS),
+                    "total_videos": total_videos,
+                    "skipped": skipped,
                     "duration_seconds": duration,
                 }
             }
         )
-
         return {
             "success": True,
-            "videos_count": len(trending),
-            "duration": duration
+            "cities": len(LOCATION_TARGETS),
+            "total_videos": total_videos,
+            "skipped": skipped,
+            "duration": duration,
         }
 
     except YouTubeStructureChangedError as e:
-        # Cấu trúc YouTube thay đổi — cần fix code, không retry
         count = _record_failure(job_id)
         logger.critical(
-            f"YouTube structure changed in trending crawl: {e}",
+            f"YouTube structure changed in location crawl: {e}",
             extra={"extra_data": {"consecutive_failures": count, "context": e.context}}
         )
         return {"success": False, "error": "structure_changed", "detail": str(e)}
 
     except Exception as e:
         count = _record_failure(job_id)
-        logger.error(
-            f"Error during trending videos crawl (failure #{count}): {e}",
-            exc_info=True
-        )
+        logger.error(f"Error during location crawl (failure #{count}): {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 
@@ -169,12 +227,13 @@ async def crawl_popular_keywords():
         for keyword in keywords:
             try:
                 # Retry lỗi mạng; YouTubeStructureChangedError sẽ được bubble up
+                proxy = await proxy_manager.get_proxy()
                 videos = await _with_retry(
                     search_youtube,
                     query=keyword,
                     max_results=20,
                     sort="upload_date",
-                    proxy=PROXY_URL,
+                    proxy=proxy,
                 )
                 results[keyword] = len(videos)
                 logger.info(f"Crawled {len(videos)} videos for keyword: '{keyword}'")

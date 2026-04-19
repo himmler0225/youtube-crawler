@@ -1,6 +1,7 @@
 from typing import Dict
-from ..utils import get_youtube_api_key, create_httpx_client
+from ..utils import get_youtube_api_key, get_context, create_httpx_client
 from ..config import get_youtube_api_url
+from ..config.constants import ENDPOINT_BROWSE
 
 def parse_channel_info(data):
     header = data.get("header", {}).get("pageHeaderRenderer", {})
@@ -47,19 +48,12 @@ def parse_channel_info(data):
     }
 
 async def get_channel_info(channel_id: str, proxy: str = None) -> Dict:
-    API_KEY = await get_youtube_api_key()
-    BROWSER_URL = get_youtube_api_url("browse", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    BROWSER_URL = get_youtube_api_url(ENDPOINT_BROWSE, API_KEY)
 
     payload = {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20230401.01.00"
-            }
-        },
-        "browseId": channel_id
+        "context": get_context(),
+        "browseId": channel_id,
     }
 
     async with create_httpx_client(proxy=proxy) as client:

@@ -1,13 +1,14 @@
 from typing import List, Dict
 from ..utils import get_youtube_api_key, get_context, create_httpx_client
 from ..config import get_youtube_headers, get_youtube_api_url
+from ..config.constants import ENDPOINT_SEARCH, SORT_RELEVANCE, SORT_UPLOAD_DATE, SORT_VIEW_COUNT, SORT_RATING
 from ..exceptions import YouTubeStructureChangedError
 
 SORT_OPTIONS = {
-    "relevance": None,
-    "upload_date": "CAISAhAB",
-    "view_count": "CAMSAhAB",
-    "rating": "CAESAhAB",
+    "relevance": SORT_RELEVANCE,
+    "upload_date": SORT_UPLOAD_DATE,
+    "view_count": SORT_VIEW_COUNT,
+    "rating": SORT_RATING,
 }
 
 def extract_video_items(items: List[Dict]) -> List[Dict]:
@@ -47,8 +48,8 @@ def extract_video_items(items: List[Dict]) -> List[Dict]:
 
 
 async def search_youtube(query: str, max_results: int = 50, proxy: str = None, sort: str = "relevance") -> List[Dict]:
-    API_KEY = await get_youtube_api_key()
-    SEARCH_URL = get_youtube_api_url("search", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    SEARCH_URL = get_youtube_api_url(ENDPOINT_SEARCH, API_KEY)
     headers = get_youtube_headers()
 
     collected = []

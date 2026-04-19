@@ -2,6 +2,7 @@ import base64
 from typing import List, Dict
 from ..utils import get_youtube_api_key, get_context, create_httpx_client
 from ..config import get_youtube_headers, get_youtube_api_url
+from ..config.constants import ENDPOINT_BROWSE, CHANNEL_TAB_VIDEOS
 from ..exceptions import YouTubeStructureChangedError
 
 def extract_video_items(items: List[Dict]) -> List[Dict]:
@@ -23,14 +24,14 @@ def extract_video_items(items: List[Dict]) -> List[Dict]:
     return videos
 
 async def get_channel_videos(channel_id: str, proxy: str = None, max_results: int = 100) -> List[Dict]:
-    API_KEY = await get_youtube_api_key()
-    BROWSE_URL = get_youtube_api_url("browse", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    BROWSE_URL = get_youtube_api_url(ENDPOINT_BROWSE, API_KEY)
     headers = get_youtube_headers()
 
     collected = []
     continuation = None
 
-    encoded = "EgZ2aWRlb3M"
+    encoded = CHANNEL_TAB_VIDEOS
     missing_padding = len(encoded) % 4
     if missing_padding:
         encoded += "=" * (4 - missing_padding)

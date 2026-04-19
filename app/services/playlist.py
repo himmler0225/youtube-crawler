@@ -1,20 +1,10 @@
 from typing import List, Dict
-from ..utils import get_youtube_api_key, create_httpx_client
+from ..utils import get_youtube_api_key, get_context, create_httpx_client
 from ..config import get_youtube_api_url
+from ..config.constants import ENDPOINT_BROWSE
 from ..exceptions import YouTubeStructureChangedError
 
-async def build_web_context() -> Dict:
-    return {
-        "context": {
-            "client": {
-                "hl": "en",
-                "gl": "US",
-                "clientName": "WEB",
-                "clientVersion": "2.20230401.01.00"
-            }
-        }
-    }
-    
+
 def extract_playlists_tab_info(data):
     tabs = data.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
 
@@ -40,11 +30,11 @@ def extract_playlists_tab_info(data):
 
 
 async def get_playlist_videos(channel_id: str, proxy: str = None) -> List[Dict]:
-    API_KEY = await get_youtube_api_key()
-    BROWSER_URL = get_youtube_api_url("browse", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    BROWSER_URL = get_youtube_api_url(ENDPOINT_BROWSE, API_KEY)
 
     async with create_httpx_client(proxy=proxy) as client:
-        payload = await build_web_context()
+        payload = {"context": get_context()}
         payload["browseId"] = channel_id
         resp = await client.post(BROWSER_URL, json=payload)
         resp.raise_for_status()
@@ -60,7 +50,7 @@ async def get_playlist_videos(channel_id: str, proxy: str = None) -> List[Dict]:
                 context={"channel_id": channel_id}
             )
 
-        payload = await build_web_context()
+        payload = {"context": get_context()}
         payload["browseId"] = browse_id
         payload["params"] = params
 
@@ -90,7 +80,7 @@ async def get_playlist_videos(channel_id: str, proxy: str = None) -> List[Dict]:
                     context={"channel_id": channel_id}
                 )
 
-            payload = await build_web_context()
+            payload = {"context": get_context()}
             payload["browseId"] = browse_id
             payload["params"] = params
 
@@ -180,10 +170,10 @@ def extract_title(title_obj):
     return ""
 
 async def get_videos_from_playlist(playlist_id: str, proxy: str = None) -> List[Dict]:
-    API_KEY = await get_youtube_api_key()
-    BROWSER_URL = get_youtube_api_url("browse", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    BROWSER_URL = get_youtube_api_url(ENDPOINT_BROWSE, API_KEY)
 
-    payload = await build_web_context()
+    payload = {"context": get_context()}
     payload["browseId"] = f"VL{playlist_id}"
 
     videos = []
@@ -248,7 +238,7 @@ async def get_videos_from_playlist(playlist_id: str, proxy: str = None) -> List[
                     )
 
             if continuation_token:
-                payload = await build_web_context()
+                payload = {"context": get_context()}
                 payload["continuation"] = continuation_token
             else:
                 break

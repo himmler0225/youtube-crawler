@@ -1,4 +1,5 @@
 import random
+from .constants import CLIENT_VERSION
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -70,7 +71,7 @@ def get_youtube_headers() -> dict:
         "Viewport-Width": str(viewport_width),
         "Device-Memory": str(device_memory),
         "X-Youtube-Client-Name": "1",
-        "X-Youtube-Client-Version": "2.20240115.00.00",
+        "X-Youtube-Client-Version": CLIENT_VERSION,
     }
 
     if "Chrome" in user_agent and random.random() > 0.3:

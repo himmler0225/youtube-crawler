@@ -1,9 +1,10 @@
 from ..utils import get_youtube_api_key, get_context, create_httpx_client
 from ..config import get_youtube_headers, get_youtube_api_url
+from ..config.constants import ENDPOINT_PLAYER
 
 async def get_video_detail(video_id: str, proxy: str = None):
-    API_KEY = await get_youtube_api_key()
-    VIDEO_DETAIL_URL = get_youtube_api_url("player", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    VIDEO_DETAIL_URL = get_youtube_api_url(ENDPOINT_PLAYER, API_KEY)
     headers = get_youtube_headers()
 
     payload = {

@@ -3,7 +3,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from app.scheduler.scheduler import get_scheduler
 from app.scheduler.jobs import (
-    crawl_trending_videos,
+    crawl_location_videos,
     crawl_popular_keywords,
     cleanup_old_data,
     health_check_job
@@ -22,16 +22,16 @@ def configure_jobs():
         logger.info("Scheduler is disabled via ENABLE_SCHEDULER env var")
         return
 
-    trending_schedule = os.getenv("TRENDING_CRON", "0 6 * * *")
+    location_schedule = os.getenv("LOCATION_CRON", "0 6 * * *")
     scheduler.add_job(
-        crawl_trending_videos,
-        trigger=CronTrigger.from_crontab(trending_schedule),
-        id="crawl_trending",
-        name="Crawl Trending Videos",
+        crawl_location_videos,
+        trigger=CronTrigger.from_crontab(location_schedule),
+        id="crawl_location",
+        name="Crawl Location Videos",
         replace_existing=True,
         max_instances=1,
     )
-    logger.info(f"Scheduled job: Crawl Trending Videos (cron: {trending_schedule})")
+    logger.info(f"Scheduled job: Crawl Location Videos (cron: {location_schedule})")
 
     keywords_schedule = os.getenv("KEYWORDS_CRON", "0 8 * * *")
     scheduler.add_job(

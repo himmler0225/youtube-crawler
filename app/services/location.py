@@ -1,8 +1,13 @@
 import asyncio
+import json
 from typing import List, Dict
 from ..utils import get_youtube_api_key, get_context, create_httpx_client
 from ..config import get_youtube_headers, get_youtube_api_url
+from ..config.constants import ENDPOINT_SEARCH, SEARCH_FILTER_LOCATION
 from ..exceptions import YouTubeStructureChangedError
+from ..config.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 def extract_videos_from_search(items: List[Dict]) -> List[Dict]:
     results = []
@@ -44,14 +49,14 @@ def generate_grid_locations(center_lat, center_lng, step_km=10, radius_km=50):
 
 
 async def get_videos_by_location(location: str, proxy: str = None, radius: str = "500km", max_results: int = 50) -> List[Dict]:
-    API_KEY = await get_youtube_api_key()
-    SEARCH_URL = get_youtube_api_url("search", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    SEARCH_URL = get_youtube_api_url(ENDPOINT_SEARCH, API_KEY)
     headers = get_youtube_headers()
 
     payload = {
         "context": get_context(),
-        "query": "*",             
-        "params": "EgIIAQ%3D%3D", 
+        "query": "*",
+        "params": SEARCH_FILTER_LOCATION,
         "location": location,
         "locationRadius": radius,
         "maxResults": max_results
@@ -65,6 +70,17 @@ async def get_videos_by_location(location: str, proxy: str = None, radius: str =
         resp.raise_for_status()
         data = resp.json()
 
+        # Log top-level keys and first 2 levels to inspect current YouTube structure
+        logger.debug(
+            "YouTube location search raw response (top-level)",
+            extra={"extra_data": {
+                "location": location,
+                "top_keys": list(data.keys()),
+                "contents_keys": list(data.get("contents", {}).keys()),
+                "raw_preview": json.dumps(data, ensure_ascii=False)[:3000],
+            }}
+        )
+
         section_contents = (
             data
             .get("contents", {})
@@ -74,6 +90,13 @@ async def get_videos_by_location(location: str, proxy: str = None, radius: str =
             .get("contents", [])
         )
         if not section_contents:
+            logger.warning(
+                "section_contents empty — dumping full response to debug",
+                extra={"extra_data": {
+                    "location": location,
+                    "full_response": json.dumps(data, ensure_ascii=False)[:8000],
+                }}
+            )
             raise YouTubeStructureChangedError(
                 "sectionListRenderer.contents not found in location search response",
                 context={"location": location, "top_keys": list(data.get("contents", {}).keys())}

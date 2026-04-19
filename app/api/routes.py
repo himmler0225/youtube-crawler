@@ -7,12 +7,11 @@ from app.services.channel_info import get_channel_info
 from app.services.playlist import get_playlist_videos, get_videos_from_playlist
 from app.services.comment import get_video_comments
 from app.services.live import get_all_live_videos
-from app.services.trending import get_trending_videos
 from app.services.location import generate_grid_locations, get_videos_by_location
 from app.utils import resolve_channel_id_from_handle
-from app.config import get_proxy
 from app.middleware import verify_api_key, limiter
 from app.config.logging_config import get_logger
+from app.config.urls import proxy_manager
 
 from dotenv import load_dotenv
 from functools import wraps
@@ -21,8 +20,6 @@ from app.exceptions import YouTubeStructureChangedError
 load_dotenv()
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 logger = get_logger(__name__)
-
-PROXY_URL = get_proxy()
 
 def retry_on_failure(max_retries=3, delay=1):
     """Retry decorator with linear backoff. Raises immediately on YouTubeStructureChangedError."""
@@ -69,7 +66,8 @@ async def search_videos(
     async def _search():
         start = (page - 1) * limit
         max_fetch = start + limit
-        results = await search_youtube(q, max_results=max_fetch, sort=sort, proxy=PROXY_URL)
+        proxy = await proxy_manager.get_proxy()
+        results = await search_youtube(q, max_results=max_fetch, sort=sort, proxy=proxy)
         return {
             "query": q,
             "page": page,
@@ -87,7 +85,8 @@ async def search_videos(
 async def video_detail(video_id: str):
     @retry_on_failure(max_retries=3, delay=1)
     async def _get_detail():
-        detail = await get_video_detail(video_id, proxy=PROXY_URL)
+        proxy = await proxy_manager.get_proxy()
+        detail = await get_video_detail(video_id, proxy=proxy)
         return {"detail": detail}
 
     try:
@@ -110,7 +109,8 @@ async def video_channel(
 
         start = (page - 1) * limit
         max_fetch = start + limit
-        videos = await get_channel_videos(channel_id=channel_id, max_results=max_fetch, proxy=PROXY_URL)
+        proxy = await proxy_manager.get_proxy()
+        videos = await get_channel_videos(channel_id=channel_id, max_results=max_fetch, proxy=proxy)
 
         return {
             "channel_id": channel_id,
@@ -127,7 +127,8 @@ async def video_channel(
 async def channel_info(channel_id: str):
     @retry_on_failure(max_retries=3, delay=1)
     async def _get_info():
-        info = await get_channel_info(channel_id, proxy=PROXY_URL)
+        proxy = await proxy_manager.get_proxy()
+        info = await get_channel_info(channel_id, proxy=proxy)
         return {"info": info}
 
     try:
@@ -139,7 +140,8 @@ async def channel_info(channel_id: str):
 async def get_channel_playlists(channel_id: str):
     @retry_on_failure(max_retries=3, delay=1)
     async def _get_playlists():
-        playlists = await get_playlist_videos(channel_id, proxy=PROXY_URL)
+        proxy = await proxy_manager.get_proxy()
+        playlists = await get_playlist_videos(channel_id, proxy=proxy)
         return {"playlists": playlists}
 
     try:
@@ -151,7 +153,8 @@ async def get_channel_playlists(channel_id: str):
 async def get_videos_from_a_playlist(playlist_id: str):
     @retry_on_failure(max_retries=3, delay=1)
     async def _get_playlist_videos():
-        videos = await get_videos_from_playlist(playlist_id, proxy=PROXY_URL)
+        proxy = await proxy_manager.get_proxy()
+        videos = await get_videos_from_playlist(playlist_id, proxy=proxy)
         return {"videos": videos}
 
     try:
@@ -169,7 +172,8 @@ async def get_comments(
     async def _get_comments():
         start = (page - 1) * limit
         max_fetch = start + limit
-        comments = await get_video_comments(video_id, proxy=PROXY_URL, max_comments=max_fetch)
+        proxy = await proxy_manager.get_proxy()
+        comments = await get_video_comments(video_id, proxy=proxy, max_comments=max_fetch)
         return {
             "video_id": video_id,
             "total": len(comments),
@@ -191,31 +195,12 @@ async def get_videos_live(
     async def _get_live():
         start = (page - 1) * limit
         max_fetch = start + limit
-        videos = await get_all_live_videos(q=q, proxy=PROXY_URL, max_results=max_fetch)
+        proxy = await proxy_manager.get_proxy()
+        videos = await get_all_live_videos(q=q, proxy=proxy, max_results=max_fetch)
         return {"videos": videos}
 
     try:
         return await _get_live()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/videos/trending")
-async def get__videos_trending(
-    page: int = Query(1, ge=1),
-    limit: int = Query(30, ge=1, le=50),
-):
-    @retry_on_failure(max_retries=3, delay=1)
-    async def _get_trending():
-        start = (page - 1) * limit
-        max_fetch = start + limit
-        videos = await get_trending_videos(proxy=PROXY_URL, max_results=max_fetch, filter_params="EgZtdXNpYw%3D%3D")
-
-        return {
-            "videos": videos[start:start + limit]
-        }
-
-    try:
-        return await _get_trending()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -230,8 +215,9 @@ async def get_videos_location(
     try:
         grid_locations = generate_grid_locations(center_lat=lat, center_lng=lng, step_km=step_km, radius_km=radius_km)
 
+        proxy = await proxy_manager.get_proxy()
         tasks = [
-            get_videos_by_location(location=loc, radius=f"{step_km}km", max_results=per_location_limit)
+            get_videos_by_location(location=loc, radius=f"{step_km}km", max_results=per_location_limit, proxy=proxy)
             for loc in grid_locations
         ]
 

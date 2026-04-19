@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional
 from ..utils import get_youtube_api_key, get_context, create_httpx_client
 from ..config import get_youtube_headers, get_youtube_api_url
+from ..config.constants import ENDPOINT_BROWSE, BROWSE_ID_TRENDING
 from ..exceptions import YouTubeStructureChangedError
 
 def extract_videos(items: List[Dict]) -> List[Dict]:
@@ -40,15 +41,15 @@ async def get_trending_videos(
     max_results: int = 100,
     filter_params: Optional[str] = None
 ) -> List[Dict]:
-    API_KEY = await get_youtube_api_key()
-    BROWSE_URL = get_youtube_api_url("browse", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    BROWSE_URL = get_youtube_api_url(ENDPOINT_BROWSE, API_KEY)
     headers = get_youtube_headers()
 
     collected: List[Dict] = []
     continuation: Optional[str] = None
 
     async with create_httpx_client(proxy=proxy, headers=headers) as client:
-        payload = {"context": get_context(), "browseId": "FEtrending"}
+        payload = {"context": get_context(), "browseId": BROWSE_ID_TRENDING}
         if filter_params:
             payload["params"] = filter_params
 

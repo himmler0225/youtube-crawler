@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from app.api.routes import router as youtube_router
+from app.api.admin import router as admin_router
 from app.middleware import (
     LoggingMiddleware,
     IPWhitelistMiddleware,
@@ -46,6 +47,7 @@ app.add_middleware(
 app.add_middleware(IPWhitelistMiddleware)
 app.add_middleware(LoggingMiddleware)
 app.include_router(youtube_router, prefix="/api", tags=["YouTube"])
+app.include_router(admin_router, tags=["Admin"])
 
 
 @app.on_event("startup")

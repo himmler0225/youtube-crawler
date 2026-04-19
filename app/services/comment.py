@@ -1,16 +1,17 @@
 from typing import List, Dict
 from ..utils import get_youtube_api_key, get_context, create_httpx_client
 from ..config import get_youtube_api_url
+from ..config.constants import ENDPOINT_NEXT
 from ..exceptions import YouTubeStructureChangedError
 from ..config.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 
-async def fetch_replies(client, continuation_token: str, context: dict) -> List[Dict]:
+async def fetch_replies(client, continuation_token: str, context: dict, proxy: str = None) -> List[Dict]:
     replies = []
-    API_KEY = await get_youtube_api_key()
-    URL_COMMENT = get_youtube_api_url("next", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    URL_COMMENT = get_youtube_api_url(ENDPOINT_NEXT, API_KEY)
 
     while continuation_token:
         payload = {
@@ -138,8 +139,8 @@ def parse_comment_entities(data: dict) -> Dict[str, Dict]:
 
 
 async def get_video_comments(video_id: str, proxy: str = None, max_comments: int = 100) -> List[Dict]:
-    API_KEY = await get_youtube_api_key()
-    URL_NEXT = get_youtube_api_url("next", API_KEY)
+    API_KEY = await get_youtube_api_key(proxy=proxy)
+    URL_NEXT = get_youtube_api_url(ENDPOINT_NEXT, API_KEY)
     URL_COMMENT = URL_NEXT
     context = get_context()
 
@@ -221,7 +222,7 @@ async def get_video_comments(video_id: str, proxy: str = None, max_comments: int
 
                         if reply_token:
                             logger.debug(f"Fetching replies for comment {comment_id}")
-                            comment_data["replies"] = await fetch_replies(client, reply_token, context)
+                            comment_data["replies"] = await fetch_replies(client, reply_token, context, proxy=proxy)
 
                         comments.append(comment_data)
                         if len(comments) >= max_comments:
