@@ -1,6 +1,6 @@
-import httpx
 from typing import Dict
-from ..utils import get_youtube_api_key
+from ..utils import get_youtube_api_key, create_httpx_client
+from ..config import get_youtube_api_url
 
 def parse_channel_info(data):
     header = data.get("header", {}).get("pageHeaderRenderer", {})
@@ -48,7 +48,7 @@ def parse_channel_info(data):
 
 async def get_channel_info(channel_id: str, proxy: str = None) -> Dict:
     API_KEY = await get_youtube_api_key()
-    BROWSER_URL = f"https://www.youtube.com/youtubei/v1/browse?key={API_KEY}"
+    BROWSER_URL = get_youtube_api_url("browse", API_KEY)
 
     payload = {
         "context": {
@@ -62,7 +62,7 @@ async def get_channel_info(channel_id: str, proxy: str = None) -> Dict:
         "browseId": channel_id
     }
 
-    async with httpx.AsyncClient(proxies=proxy, timeout=15) as client:
+    async with create_httpx_client(proxy=proxy) as client:
         resp = await client.post(BROWSER_URL, json=payload)
         resp.raise_for_status()
         data = resp.json()

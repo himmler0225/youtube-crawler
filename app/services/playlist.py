@@ -1,6 +1,7 @@
-import httpx
 from typing import List, Dict
-from ..utils import get_youtube_api_key
+from ..utils import get_youtube_api_key, create_httpx_client
+from ..config import get_youtube_api_url
+from ..exceptions import YouTubeStructureChangedError
 
 async def build_web_context() -> Dict:
     return {
@@ -30,16 +31,19 @@ def extract_playlists_tab_info(data):
             break
 
     if not browse_id or not params:
-        raise Exception("Cannot find browseId or params for the Playlists tab.")
+        raise YouTubeStructureChangedError(
+            "Cannot find browseId or params for the Videos tab",
+            context={"tabs_count": len(tabs)}
+        )
 
     return browse_id, params
 
 
 async def get_playlist_videos(channel_id: str, proxy: str = None) -> List[Dict]:
     API_KEY = await get_youtube_api_key()
-    BROWSER_URL = f"https://www.youtube.com/youtubei/v1/browse?key={API_KEY}"
+    BROWSER_URL = get_youtube_api_url("browse", API_KEY)
 
-    async with httpx.AsyncClient(proxies=proxy, timeout=15) as client:
+    async with create_httpx_client(proxy=proxy) as client:
         payload = await build_web_context()
         payload["browseId"] = channel_id
         resp = await client.post(BROWSER_URL, json=payload)
@@ -51,7 +55,10 @@ async def get_playlist_videos(channel_id: str, proxy: str = None) -> List[Dict]:
         browse_id, params = extract_playlists_tab_info(data)
 
         if not browse_id or not params:
-            raise Exception("browseId and params not found")
+            raise YouTubeStructureChangedError(
+                "browseId and params not found after first browse request",
+                context={"channel_id": channel_id}
+            )
 
         payload = await build_web_context()
         payload["browseId"] = browse_id
@@ -74,11 +81,14 @@ async def get_playlist_videos(channel_id: str, proxy: str = None) -> List[Dict]:
                 break
 
         if not target_tab or "content" not in target_tab:
-            endpoint = target_tab.get("endpoint", {}).get("browseEndpoint", {})
+            endpoint = (target_tab or {}).get("endpoint", {}).get("browseEndpoint", {})
             browse_id = endpoint.get("browseId")
             params = endpoint.get("params")
             if not browse_id or not params:
-                raise Exception("browseId and params not found")
+                raise YouTubeStructureChangedError(
+                    "browseId and params not found for Playlists tab endpoint",
+                    context={"channel_id": channel_id}
+                )
 
             payload = await build_web_context()
             payload["browseId"] = browse_id
@@ -97,7 +107,10 @@ async def get_playlist_videos(channel_id: str, proxy: str = None) -> List[Dict]:
                 None
             )
             if not target_tab:
-                raise Exception("Playlists not load from browseEndpoint")
+                raise YouTubeStructureChangedError(
+                    "Playlists tab not found after second browseEndpoint request",
+                    context={"channel_id": channel_id}
+                )
 
         contents = target_tab.get("content", {}) \
                              .get("sectionListRenderer", {})
@@ -117,9 +130,6 @@ async def get_playlist_videos(channel_id: str, proxy: str = None) -> List[Dict]:
                               .get("url", "")
                     )
                     
-                    import json
-                    with open("playlist_error_dump.json", "w", encoding="utf-8") as f:
-                        json.dump(lockup, f, ensure_ascii=False, indent=2)
                     videoCount = ""
                     
                     overlays = (
@@ -171,30 +181,49 @@ def extract_title(title_obj):
 
 async def get_videos_from_playlist(playlist_id: str, proxy: str = None) -> List[Dict]:
     API_KEY = await get_youtube_api_key()
-    BROWSER_URL = f"https://www.youtube.com/youtubei/v1/browse?key={API_KEY}"
+    BROWSER_URL = get_youtube_api_url("browse", API_KEY)
 
     payload = await build_web_context()
     payload["browseId"] = f"VL{playlist_id}"
 
     videos = []
 
-    async with httpx.AsyncClient(proxies=proxy, timeout=15) as client:
+    async with create_httpx_client(proxy=proxy) as client:
         while True:
             resp = await client.post(BROWSER_URL, json=payload)
             resp.raise_for_status()
             data = resp.json()
 
             if "contents" not in data:
-                raise Exception("Invalid response structure")
-
-            try:
-                contents = (
-                    data["contents"]["twoColumnBrowseResultsRenderer"]["tabs"][0]
-                    ["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]
-                    ["itemSectionRenderer"]["contents"][0]["playlistVideoListRenderer"]["contents"]
+                raise YouTubeStructureChangedError(
+                    "Top-level 'contents' missing in playlist response",
+                    context={"playlist_id": playlist_id, "top_keys": list(data.keys())}
                 )
-            except Exception as e:
-                print("[!] Error parsing playlist content:", e)
+
+            tabs = (
+                data
+                .get("contents", {})
+                .get("twoColumnBrowseResultsRenderer", {})
+                .get("tabs", [])
+            )
+            contents = (
+                (tabs[0] if tabs else {})
+                .get("tabRenderer", {})
+                .get("content", {})
+                .get("sectionListRenderer", {})
+                .get("contents", [])
+            )
+            playlist_items_list = (
+                (contents[0] if contents else {})
+                .get("itemSectionRenderer", {})
+                .get("contents", [])
+            )
+            contents = (
+                (playlist_items_list[0] if playlist_items_list else {})
+                .get("playlistVideoListRenderer", {})
+                .get("contents", [])
+            )
+            if not contents:
                 break
 
             continuation_token = None
@@ -211,8 +240,11 @@ async def get_videos_from_playlist(playlist_id: str, proxy: str = None) -> List[
                     })
                 elif "continuationItemRenderer" in item:
                     continuation_token = (
-                        item["continuationItemRenderer"]
-                        ["continuationEndpoint"]["continuationCommand"]["token"]
+                        item
+                        .get("continuationItemRenderer", {})
+                        .get("continuationEndpoint", {})
+                        .get("continuationCommand", {})
+                        .get("token")
                     )
 
             if continuation_token:

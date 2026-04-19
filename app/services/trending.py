@@ -1,6 +1,7 @@
-import httpx
 from typing import List, Dict, Optional
-from ..utils import get_youtube_api_key, get_context
+from ..utils import get_youtube_api_key, get_context, create_httpx_client
+from ..config import get_youtube_headers, get_youtube_api_url
+from ..exceptions import YouTubeStructureChangedError
 
 def extract_videos(items: List[Dict]) -> List[Dict]:
     results = []
@@ -40,20 +41,13 @@ async def get_trending_videos(
     filter_params: Optional[str] = None
 ) -> List[Dict]:
     API_KEY = await get_youtube_api_key()
-    BROWSE_URL = f"https://www.youtube.com/youtubei/v1/browse?key={API_KEY}"
-
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://www.youtube.com",
-        "Referer": "https://www.youtube.com"
-    }
+    BROWSE_URL = get_youtube_api_url("browse", API_KEY)
+    headers = get_youtube_headers()
 
     collected: List[Dict] = []
     continuation: Optional[str] = None
 
-    async with httpx.AsyncClient(proxies=proxy, headers=headers, timeout=15) as client:
-        # Initial request
+    async with create_httpx_client(proxy=proxy, headers=headers) as client:
         payload = {"context": get_context(), "browseId": "FEtrending"}
         if filter_params:
             payload["params"] = filter_params
@@ -62,13 +56,26 @@ async def get_trending_videos(
         resp.raise_for_status()
         data = resp.json()
 
-        renderers = data.get("contents", {}) \
-                        .get("twoColumnBrowseResultsRenderer", {}) \
-                        .get("tabs", [])[0] \
-                        .get("tabRenderer", {}) \
-                        .get("content", {}) \
-                        .get("sectionListRenderer", {}) \
-                        .get("contents", [])
+        # Safe navigation — avoid IndexError on empty tabs and KeyError on structure changes
+        tabs = (
+            data
+            .get("contents", {})
+            .get("twoColumnBrowseResultsRenderer", {})
+            .get("tabs", [])
+        )
+        if not tabs:
+            raise YouTubeStructureChangedError(
+                "twoColumnBrowseResultsRenderer.tabs is empty or missing",
+                context={"top_keys": list(data.get("contents", {}).keys())}
+            )
+
+        renderers = (
+            tabs[0]
+            .get("tabRenderer", {})
+            .get("content", {})
+            .get("sectionListRenderer", {})
+            .get("contents", [])
+        )
 
         for section in renderers:
             items = section.get("itemSectionRenderer", {}).get("contents", [])
@@ -86,7 +93,6 @@ async def get_trending_videos(
                 None
             )
 
-        # Pagination
         while continuation and len(collected) < max_results:
             payload = {"context": get_context(), "continuation": continuation}
             resp = await client.post(BROWSE_URL, json=payload)

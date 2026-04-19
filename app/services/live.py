@@ -1,8 +1,7 @@
-import httpx
 from typing import List, Dict
-from ..utils import get_context, get_youtube_api_key
-
-SEARCH_URL = "https://www.youtube.com/youtubei/v1/search"
+from ..utils import get_context, get_youtube_api_key, create_httpx_client
+from ..config import get_youtube_headers, get_youtube_api_url
+from ..exceptions import YouTubeStructureChangedError
 
 def extract_live_videos(items: List[Dict]) -> List[Dict]:
     videos = []
@@ -28,31 +27,35 @@ def extract_live_videos(items: List[Dict]) -> List[Dict]:
 
 async def get_all_live_videos(q: str, proxy: str = None, max_results: int = 100) -> List[Dict]:
     API_KEY = await get_youtube_api_key()
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://www.youtube.com",
-        "Referer": "https://www.youtube.com/"
-    }
+    SEARCH_URL = get_youtube_api_url("search", API_KEY)
+    headers = get_youtube_headers()
 
     collected = []
     continuation = None
 
-    async with httpx.AsyncClient(proxies=proxy, headers=headers, timeout=15) as client:
+    async with create_httpx_client(proxy=proxy, headers=headers) as client:
         payload = {
             "context": get_context(),
             "query": q,
             "params": "EgJAAQ%3D%3D"
         }
-        resp = await client.post(f"{SEARCH_URL}?key={API_KEY}", json=payload)
+        resp = await client.post(SEARCH_URL, json=payload)
         resp.raise_for_status()
         data = resp.json()
 
-        contents = data.get("contents", {}) \
-                       .get("twoColumnSearchResultsRenderer", {}) \
-                       .get("primaryContents", {}) \
-                       .get("sectionListRenderer", {}) \
-                       .get("contents", [])
+        contents = (
+            data
+            .get("contents", {})
+            .get("twoColumnSearchResultsRenderer", {})
+            .get("primaryContents", {})
+            .get("sectionListRenderer", {})
+            .get("contents", [])
+        )
+        if not contents:
+            raise YouTubeStructureChangedError(
+                "sectionListRenderer.contents not found in live search response",
+                context={"top_keys": list(data.get("contents", {}).keys())}
+            )
 
         for section in contents:
             items = section.get("itemSectionRenderer", {}).get("contents", [])
@@ -72,13 +75,16 @@ async def get_all_live_videos(q: str, proxy: str = None, max_results: int = 100)
                 "context": get_context(),
                 "continuation": continuation
             }
-            resp = await client.post(f"{SEARCH_URL}?key={API_KEY}", json=payload)
+            resp = await client.post(SEARCH_URL, json=payload)
             resp.raise_for_status()
             data = resp.json()
 
-            continuation_items = data.get("onResponseReceivedCommands", [])[0] \
-                                     .get("appendContinuationItemsAction", {}) \
-                                     .get("continuationItems", [])
+            commands = data.get("onResponseReceivedCommands", [])
+            continuation_items = (
+                commands[0]
+                .get("appendContinuationItemsAction", {})
+                .get("continuationItems", [])
+            ) if commands else []
 
             collected += extract_live_videos(continuation_items)
 

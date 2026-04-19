@@ -1,7 +1,8 @@
 import base64
-import httpx
 from typing import List, Dict
-from ..utils import get_youtube_api_key, get_context
+from ..utils import get_youtube_api_key, get_context, create_httpx_client
+from ..config import get_youtube_headers, get_youtube_api_url
+from ..exceptions import YouTubeStructureChangedError
 
 def extract_video_items(items: List[Dict]) -> List[Dict]:
     videos = []
@@ -23,13 +24,8 @@ def extract_video_items(items: List[Dict]) -> List[Dict]:
 
 async def get_channel_videos(channel_id: str, proxy: str = None, max_results: int = 100) -> List[Dict]:
     API_KEY = await get_youtube_api_key()
-    BROWSE_URL = f"https://www.youtube.com/youtubei/v1/browse?key={API_KEY}"
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://www.youtube.com",
-        "Referer": "https://www.youtube.com/"
-    }
+    BROWSE_URL = get_youtube_api_url("browse", API_KEY)
+    headers = get_youtube_headers()
 
     collected = []
     continuation = None
@@ -41,7 +37,7 @@ async def get_channel_videos(channel_id: str, proxy: str = None, max_results: in
 
     decoded = base64.b64decode(encoded).decode("utf-8")
 
-    async with httpx.AsyncClient(proxies=proxy, headers=headers, timeout=15) as client:
+    async with create_httpx_client(proxy=proxy, headers=headers) as client:
         payload = {"context": get_context(), "browseId": channel_id, "params": decoded}
         resp = await client.post(BROWSE_URL, json=payload)
         resp.raise_for_status()
@@ -49,7 +45,10 @@ async def get_channel_videos(channel_id: str, proxy: str = None, max_results: in
 
         tabs = data.get("contents", {}).get("twoColumnBrowseResultsRenderer", {}).get("tabs", [])
         if not tabs:
-            raise Exception("'Tabs' not found")
+            raise YouTubeStructureChangedError(
+                "twoColumnBrowseResultsRenderer.tabs not found for channel",
+                context={"channel_id": channel_id}
+            )
 
         videos_tab = next((tab for tab in tabs if tab.get("tabRenderer", {}).get("title", "").lower() == "videos"), None)
         
@@ -70,7 +69,10 @@ async def get_channel_videos(channel_id: str, proxy: str = None, max_results: in
         if not videos_tab:
             videos_tab = next((tab for tab in tabs if tab.get("tabRenderer", {}).get("title", "").lower() == "home"), None)
             if not videos_tab:
-                raise Exception("Videos or Home not found")
+                raise YouTubeStructureChangedError(
+                    "Neither 'Videos' nor 'Home' tab found for channel",
+                    context={"channel_id": channel_id}
+                )
 
         section = videos_tab.get("tabRenderer", {}).get("content", {}) \
                             .get("richGridRenderer", {}) \

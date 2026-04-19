@@ -1,8 +1,8 @@
 import asyncio
-import json
-import httpx
 from typing import List, Dict
-from ..utils import get_youtube_api_key, get_context
+from ..utils import get_youtube_api_key, get_context, create_httpx_client
+from ..config import get_youtube_headers, get_youtube_api_url
+from ..exceptions import YouTubeStructureChangedError
 
 def extract_videos_from_search(items: List[Dict]) -> List[Dict]:
     results = []
@@ -45,14 +45,8 @@ def generate_grid_locations(center_lat, center_lng, step_km=10, radius_km=50):
 
 async def get_videos_by_location(location: str, proxy: str = None, radius: str = "500km", max_results: int = 50) -> List[Dict]:
     API_KEY = await get_youtube_api_key()
-    SEARCH_URL = f"https://www.youtube.com/youtubei/v1/search?key={API_KEY}"
-    
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://www.youtube.com",
-        "Referer": "https://www.youtube.com"
-    }
+    SEARCH_URL = get_youtube_api_url("search", API_KEY)
+    headers = get_youtube_headers()
 
     payload = {
         "context": get_context(),
@@ -66,16 +60,24 @@ async def get_videos_by_location(location: str, proxy: str = None, radius: str =
     collected = []
     continuation = None
 
-    async with httpx.AsyncClient(proxies=proxy, headers=headers, timeout=15) as client:
+    async with create_httpx_client(proxy=proxy, headers=headers) as client:
         resp = await client.post(SEARCH_URL, json=payload)
         resp.raise_for_status()
         data = resp.json()
 
-        section_contents = data.get("contents", {}) \
-                               .get("twoColumnSearchResultsRenderer", {}) \
-                               .get("primaryContents", {}) \
-                               .get("sectionListRenderer", {}) \
-                               .get("contents", [])
+        section_contents = (
+            data
+            .get("contents", {})
+            .get("twoColumnSearchResultsRenderer", {})
+            .get("primaryContents", {})
+            .get("sectionListRenderer", {})
+            .get("contents", [])
+        )
+        if not section_contents:
+            raise YouTubeStructureChangedError(
+                "sectionListRenderer.contents not found in location search response",
+                context={"location": location, "top_keys": list(data.get("contents", {}).keys())}
+            )
         
         for section in section_contents:
             items = section.get("itemSectionRenderer", {}).get("contents", [])
@@ -101,10 +103,8 @@ async def get_videos_by_location(location: str, proxy: str = None, radius: str =
             resp.raise_for_status()
             data = resp.json()
             
-            with open("debug_location_continuation.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
-            items = data.get("onResponseReceivedCommands", [{}])[0] \
+            commands = data.get("onResponseReceivedCommands", [])
+            items = (commands[0] if commands else {}) \
                         .get("appendContinuationItemsAction", {}) \
                         .get("continuationItems", [])
             collected += extract_videos_from_search(items)
@@ -130,8 +130,9 @@ async def get_all_location_videos(center_lat: float, center_lng: float, proxy: s
     seen = set()
     for videos in results:
         for v in videos:
-            if v["videoId"] not in seen:
+            vid = v.get("video_id")
+            if vid and vid not in seen:
                 all_videos.append(v)
-                seen.add(v["videoId"])
+                seen.add(vid)
 
     return all_videos

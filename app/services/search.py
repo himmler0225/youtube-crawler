@@ -1,6 +1,7 @@
-import httpx
 from typing import List, Dict
-from ..utils import get_youtube_api_key, get_context
+from ..utils import get_youtube_api_key, get_context, create_httpx_client
+from ..config import get_youtube_headers, get_youtube_api_url
+from ..exceptions import YouTubeStructureChangedError
 
 SORT_OPTIONS = {
     "relevance": None,
@@ -47,21 +48,14 @@ def extract_video_items(items: List[Dict]) -> List[Dict]:
 
 async def search_youtube(query: str, max_results: int = 50, proxy: str = None, sort: str = "relevance") -> List[Dict]:
     API_KEY = await get_youtube_api_key()
-    SEARCH_URL = f"https://www.youtube.com/youtubei/v1/search?key={API_KEY}"
-
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://www.youtube.com",
-        "Referer": "https://www.youtube.com/"
-    }
+    SEARCH_URL = get_youtube_api_url("search", API_KEY)
+    headers = get_youtube_headers()
 
     collected = []
     continuation = None
     sort_param = SORT_OPTIONS.get(sort)
 
-    async with httpx.AsyncClient(proxies=proxy, headers=headers, timeout=15) as client:
-        # First request
+    async with create_httpx_client(proxy=proxy, headers=headers) as client:
         payload = {
             "context": get_context(),
             "query": query
@@ -74,16 +68,33 @@ async def search_youtube(query: str, max_results: int = 50, proxy: str = None, s
         resp.raise_for_status()
         data = resp.json()
 
-        # Extract initial items
-        sections = data["contents"]["twoColumnSearchResultsRenderer"]["primaryContents"]["sectionListRenderer"]["contents"]
+        # Safe navigation to avoid KeyError if YouTube changes response structure
+        sections = (
+            data
+            .get("contents", {})
+            .get("twoColumnSearchResultsRenderer", {})
+            .get("primaryContents", {})
+            .get("sectionListRenderer", {})
+            .get("contents")
+        )
+        if not sections:
+            raise YouTubeStructureChangedError(
+                "sectionListRenderer.contents not found in search response",
+                context={"top_keys": list(data.get("contents", {}).keys())}
+            )
+
         for section in sections:
             if "itemSectionRenderer" in section:
                 items = section["itemSectionRenderer"].get("contents", [])
                 collected += extract_video_items(items)
             if "continuationItemRenderer" in section:
-                continuation = section["continuationItemRenderer"]["continuationEndpoint"]["continuationCommand"]["token"]
+                continuation = (
+                    section.get("continuationItemRenderer", {})
+                    .get("continuationEndpoint", {})
+                    .get("continuationCommand", {})
+                    .get("token")
+                )
 
-        # Continue fetching
         while continuation and len(collected) < max_results:
             payload = {
                 "context": get_context(),
@@ -94,15 +105,23 @@ async def search_youtube(query: str, max_results: int = 50, proxy: str = None, s
             resp.raise_for_status()
             data = resp.json()
 
-            continuation_items = data.get("onResponseReceivedCommands", [])[0] \
-                .get("appendContinuationItemsAction", {}) \
+            commands = data.get("onResponseReceivedCommands", [])
+            continuation_items = (
+                commands[0]
+                .get("appendContinuationItemsAction", {})
                 .get("continuationItems", [])
+            ) if commands else []
 
             for section in continuation_items:
                 if "itemSectionRenderer" in section:
                     items = section["itemSectionRenderer"].get("contents", [])
                     collected += extract_video_items(items)
                 if "continuationItemRenderer" in section:
-                    continuation = section["continuationItemRenderer"]["continuationEndpoint"]["continuationCommand"]["token"]
+                    continuation = (
+                        section.get("continuationItemRenderer", {})
+                        .get("continuationEndpoint", {})
+                        .get("continuationCommand", {})
+                        .get("token")
+                    )
 
     return collected[:max_results]

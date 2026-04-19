@@ -1,23 +1,17 @@
-import httpx
-from ..utils import get_youtube_api_key, get_context
+from ..utils import get_youtube_api_key, get_context, create_httpx_client
+from ..config import get_youtube_headers, get_youtube_api_url
 
 async def get_video_detail(video_id: str, proxy: str = None):
     API_KEY = await get_youtube_api_key()
-    VIDEO_DETAIL_URL = f"https://www.youtube.com/youtubei/v1/player?key={API_KEY}"
-    
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://www.youtube.com",
-        "Referer": "https://www.youtube.com"
-    }
+    VIDEO_DETAIL_URL = get_youtube_api_url("player", API_KEY)
+    headers = get_youtube_headers()
 
     payload = {
         "context": get_context(),
         "videoId": video_id
     }
 
-    async with httpx.AsyncClient(proxies=proxy, headers=headers, timeout=10) as client:
+    async with create_httpx_client(proxy=proxy, headers=headers, timeout=10) as client:
         resp = await client.post(VIDEO_DETAIL_URL, json=payload)
         resp.raise_for_status()
         data = resp.json()
