@@ -1,10 +1,10 @@
 # youtube-crawler
 
-FastAPI crawler lấy data từ YouTube internal API, push sang `youtube-api` để lưu DB.
+FastAPI service that fetches data from the YouTube internal API and pushes it to `youtube-api` for storage.
 
 ---
 
-## Kiến trúc
+## Architecture
 
 ```
 APScheduler (cron jobs)
@@ -20,95 +20,95 @@ youtube-api (real-time requests)
 
 ---
 
-## Cấu trúc thư mục
+## Project structure
 
 ```
 app/
 ├── api/
-│   ├── routes.py                  # Tất cả FastAPI endpoints
-│   └── rate_limit_config.py       # Rate limit per endpoint
+│   ├── routes.py                  # All FastAPI endpoints
+│   └── rate_limit_config.py       # Per-endpoint rate limit config
 ├── config/
 │   ├── urls.py                    # Base URL + proxy config
 │   ├── headers.py                 # Randomized headers (User-Agent, viewport...)
-│   └── logging_config.py          # JSON logger, 3 handlers (console, app.log, error.log)
+│   └── logging_config.py          # JSON logger — console, app.log, error.log
 ├── middleware/
 │   ├── auth_middleware.py          # X-API-Key authentication
 │   ├── ip_whitelist.py             # IP whitelist + service token auth
 │   ├── rate_limit.py               # Rate limiting (slowapi)
-│   └── logging_middleware.py       # Request/response logging với requestId
+│   └── logging_middleware.py       # Request/response logging with requestId
 ├── services/
-│   ├── detail.py                   # Chi tiết 1 video (watch page + fallback API)
-│   ├── search.py                   # Tìm kiếm video + pagination
-│   ├── trending.py                 # Video trending (crawl từ HTML page)
-│   ├── live.py                     # Video đang livestream
+│   ├── detail.py                   # Single video detail (watch page + API fallback)
+│   ├── search.py                   # Video search + pagination
+│   ├── trending.py                 # Trending videos (scraped from HTML page)
+│   ├── live.py                     # Live streams
 │   ├── comment.py                  # Comments + replies
 │   ├── shorts.py                   # Shorts feed
-│   ├── channel.py                  # Videos của channel
-│   ├── channel_info.py             # Metadata channel (avatar, banner, subscribers)
-│   ├── playlist.py                 # Playlists của channel
-│   └── location.py                 # Videos theo vùng (gl/hl context targeting)
+│   ├── channel.py                  # Channel videos
+│   ├── channel_info.py             # Channel metadata (avatar, banner, subscribers)
+│   ├── playlist.py                 # Channel playlists
+│   └── location.py                 # Region-targeted videos via gl/hl context
 ├── scheduler/
 │   ├── scheduler.py                # APScheduler singleton lifecycle
 │   ├── config.py                   # Job schedules (cron triggers, env vars)
 │   └── jobs.py                     # Job implementations (retry, circuit breaker)
-├── ingest_client.py                # HTTP client push data sang youtube-api
+├── ingest_client.py                # HTTP client that pushes data to youtube-api
 ├── exceptions.py                   # YouTubeStructureChangedError, CrawlNetworkError
-├── types.py                        # TypedDict cho tất cả data structures
-└── utils.py                        # httpx client, proxy config, helper functions
+├── types.py                        # TypedDicts for all data structures
+└── utils.py                        # httpx client, proxy config, helpers
 ```
 
 ---
 
 ## API Endpoints
 
-Tất cả endpoints yêu cầu header `X-API-Key`.
+All endpoints require the `X-API-Key` header.
 
-| Method | Path | Mô tả | Params |
-|--------|------|--------|--------|
-| GET | `/api/videos/search` | Tìm kiếm video | `q`, `page`, `limit`, `sort` |
-| GET | `/api/videos/trending` | Trending videos | `limit` |
-| GET | `/api/videos/live` | Live streams theo keyword | `q`, `page`, `limit` |
-| GET | `/api/videos/shorts` | Shorts feed | `limit` |
-| GET | `/api/videos/location` | Videos theo vùng địa lý | `gl`, `hl`, `query`, `max_results` |
-| GET | `/api/video/{video_id}` | Chi tiết video | — |
-| GET | `/api/video/{video_id}/comments` | Comments + replies | `page`, `limit` |
-| GET | `/api/channel/{channel_id}` | Metadata channel | — |
-| GET | `/api/channel/{channel_id}/videos` | Videos của channel | `page`, `limit` |
-| GET | `/api/channel/{channel_id}/playlists` | Playlists của channel | — |
-| GET | `/api/playlist/{playlist_id}/videos` | Videos trong playlist | — |
-| GET | `/health` | Health check | — |
+| Method | Path | Params | Description |
+|--------|------|--------|-------------|
+| GET | `/api/videos/search` | `q`, `page`, `limit`, `sort` | Search videos |
+| GET | `/api/videos/trending` | `limit` | Trending videos |
+| GET | `/api/videos/live` | `q`, `page`, `limit` | Live streams by keyword |
+| GET | `/api/videos/shorts` | `limit` | Shorts feed |
+| GET | `/api/videos/location` | `gl`, `hl`, `query`, `max_results` | Region-targeted videos |
+| GET | `/api/video/{video_id}` | — | Video detail |
+| GET | `/api/video/{video_id}/comments` | `page`, `limit` | Comments + replies |
+| GET | `/api/channel/{channel_id}` | — | Channel metadata |
+| GET | `/api/channel/{channel_id}/videos` | `page`, `limit` | Channel videos |
+| GET | `/api/channel/{channel_id}/playlists` | — | Channel playlists |
+| GET | `/api/playlist/{playlist_id}/videos` | — | Playlist videos |
+| GET | `/health` | — | Health check |
 
-### Ví dụ `/api/videos/location`
+### `/api/videos/location` examples
 
 ```
-GET /api/videos/location?gl=VN&hl=vi&query=Hà+Nội
+GET /api/videos/location?gl=VN&hl=vi&query=Hanoi
 GET /api/videos/location?gl=JP&hl=ja&query=東京&max_results=30
 ```
 
-> YouTube internal API không hỗ trợ lat/lng. Targeting theo vùng thực hiện qua `gl` (country code) trong InnerTube context.
+> The YouTube internal API does not support lat/lng parameters. Geographic targeting is done via the `gl` country code in the InnerTube request context.
 
 ---
 
 ## Scheduled Jobs
 
-| Job | Cron | Mô tả |
-|-----|------|--------|
+| Job | Cron | Description |
+|-----|------|-------------|
 | `crawl_trending_videos` | `0 7 * * *` | Top 100 trending → ingest/trending |
-| `crawl_location_videos` | `0 6 * * *` | 26 vùng (gl/hl) → ingest/search |
-| `crawl_popular_keywords` | `0 8 * * *` | Keywords cố định → ingest/search |
-| `cleanup_old_data` | `0 2 * * 0` | Dọn dữ liệu cũ (hằng tuần) |
-| `health_check_job` | mỗi 60 phút | Kiểm tra hệ thống |
+| `crawl_location_videos` | `0 6 * * *` | 26 regions (gl/hl) → ingest/search |
+| `crawl_popular_keywords` | `0 8 * * *` | Fixed keyword list → ingest/search |
+| `cleanup_old_data` | `0 2 * * 0` | Weekly data cleanup |
+| `health_check_job` | every 60 min | System health check |
 
-Tất cả jobs có retry (linear backoff, 3 lần) và circuit breaker (dừng sau 5 lỗi liên tiếp, tự reset sau 1 giờ).
+All jobs have retry logic (linear backoff, 3 attempts) and a circuit breaker that stops after 5 consecutive failures and resets after 1 hour.
 
 ---
 
-## Middleware stack (theo thứ tự)
+## Middleware stack (in order)
 
-1. `IPWhitelistMiddleware` — chặn IP không hợp lệ (có thể tắt qua env)
-2. `LoggingMiddleware` — log mỗi request/response với requestId và thời gian
-3. `AuthMiddleware` — xác thực X-API-Key
-4. `RateLimitMiddleware` — rate limit theo API key hoặc IP
+1. `IPWhitelistMiddleware` — blocks unlisted IPs (can be disabled via env)
+2. `LoggingMiddleware` — logs every request/response with requestId and duration
+3. `AuthMiddleware` — validates `X-API-Key`
+4. `RateLimitMiddleware` — rate limits per API key or IP
 
 ---
 
@@ -119,13 +119,13 @@ Tất cả jobs có retry (linear backoff, 3 lần) và circuit breaker (dừng 
 PORT=8000
 
 # API Authentication
-API_KEYS=key1,key2                    # Danh sách API key hợp lệ (comma-separated)
+API_KEYS=key1,key2              # Comma-separated list of valid API keys
 
 # IP Whitelist
-IP_WHITELIST=                         # VD: 127.0.0.1,10.0.0.1
+IP_WHITELIST=                   # e.g. 127.0.0.1,10.0.0.1
 IP_WHITELIST_ENABLED=false
 
-# Service auth (giữa internal services)
+# Service auth (between internal services)
 SERVICE_TOKENS=name:token
 
 # Proxy (optional)
@@ -137,16 +137,16 @@ TRENDING_CRON=0 7 * * *
 LOCATION_CRON=0 6 * * *
 KEYWORDS_CRON=0 8 * * *
 CLEANUP_CRON=0 2 * * 0
-HEALTH_CHECK_INTERVAL=60              # phút
+HEALTH_CHECK_INTERVAL=60        # minutes
 
-# Ingest (push sang youtube-api)
+# Ingest (push to youtube-api)
 INGEST_API_URL=http://localhost:3000
-INGEST_SERVICE_KEY=                   # phải khớp INTERNAL_SERVICE_KEY bên youtube-api
+INGEST_SERVICE_KEY=             # must match INTERNAL_SERVICE_KEY in youtube-api
 ```
 
 ---
 
-## Chạy local
+## Running locally
 
 ```bash
 pip install -r requirements.txt
