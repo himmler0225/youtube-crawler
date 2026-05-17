@@ -65,25 +65,25 @@ async def fetch_replies(client, continuation_token: str, context: dict, proxy: s
 
 
 def extract_comment_continuation_token(data: dict) -> str:
-    # Path 1: onResponseReceivedEndpoints
+    # Path 1: onResponseReceivedEndpoints — check cả reload lẫn append action
     try:
-        endpoints = data.get("onResponseReceivedEndpoints", [])
-        for ep in endpoints:
-            actions = ep.get("reloadContinuationItemsCommand", {}).get("continuationItems", [])
-            for item in actions:
-                continuation = (
-                    item
-                    .get("continuationItemRenderer", {})
-                    .get("continuationEndpoint", {})
-                    .get("continuationCommand", {})
-                    .get("token")
-                )
-                if continuation:
-                    return continuation
+        for ep in data.get("onResponseReceivedEndpoints", []):
+            for action_key in ("reloadContinuationItemsCommand", "appendContinuationItemsAction"):
+                items = ep.get(action_key, {}).get("continuationItems", [])
+                for item in items:
+                    token = (
+                        item
+                        .get("continuationItemRenderer", {})
+                        .get("continuationEndpoint", {})
+                        .get("continuationCommand", {})
+                        .get("token")
+                    )
+                    if token:
+                        return token
     except Exception as e:
         logger.debug(f"Path 1 (onResponseReceivedEndpoints) failed: {e}")
 
-    # Path 2: twoColumnWatchNextResults (fallback)
+    # Path 2: twoColumnWatchNextResults
     try:
         results = (
             data
@@ -94,19 +94,52 @@ def extract_comment_continuation_token(data: dict) -> str:
             .get("contents", [])
         )
         for item in results:
-            item_section = item.get("itemSectionRenderer", {})
-            for content in item_section.get("contents", []):
-                continuation = (
+            for content in item.get("itemSectionRenderer", {}).get("contents", []):
+                token = (
                     content
                     .get("continuationItemRenderer", {})
                     .get("continuationEndpoint", {})
                     .get("continuationCommand", {})
                     .get("token")
                 )
-                if continuation:
-                    return continuation
+                if token:
+                    return token
     except Exception as e:
         logger.debug(f"Path 2 (twoColumnWatchNextResults) failed: {e}")
+
+    # Path 3: engagementPanels — comment section
+    try:
+        for panel in data.get("engagementPanels", []):
+            renderer = panel.get("engagementPanelSectionListRenderer", {})
+            if "comment" not in renderer.get("panelIdentifier", "").lower():
+                continue
+            section = renderer.get("content", {}).get("sectionListRenderer", {})
+            for cont in section.get("continuations", []):
+                token = cont.get("nextContinuationData", {}).get("continuation")
+                if token:
+                    return token
+    except Exception as e:
+        logger.debug(f"Path 3 (engagementPanels) failed: {e}")
+
+    # Path 4: frameworkUpdates mutations — newer YouTube responses
+    try:
+        mutations = (
+            data
+            .get("frameworkUpdates", {})
+            .get("entityBatchUpdate", {})
+            .get("mutations", [])
+        )
+        for m in mutations:
+            token = (
+                m.get("payload", {})
+                .get("continuationEndpoint", {})
+                .get("continuationCommand", {})
+                .get("token")
+            )
+            if token:
+                return token
+    except Exception as e:
+        logger.debug(f"Path 4 (frameworkUpdates) failed: {e}")
 
     return None
 

@@ -125,6 +125,7 @@ async def ingest_shorts(videos: List[Dict]) -> bool:
         normalized.append({
             "video_id": video_id,
             "title": v.get("title") or None,
+            "channel_id": v.get("channel_id") or None,
             "channel_name": v.get("channel_name") or None,
             "view_count": v.get("view_count") or None,
             "duration": duration,
@@ -141,6 +142,78 @@ async def ingest_shorts(videos: List[Dict]) -> bool:
             return True
         except Exception as e:
             logger.warning(f"ingest_shorts failed: {e!r}")
+            return False
+
+
+async def ingest_channel_videos(
+    channel_id: str,
+    videos: List[Dict],
+    channel_name: Optional[str] = None,
+) -> bool:
+    normalized = []
+    for v in videos:
+        # channel.py returns "videoId" (camelCase); normalise to snake_case
+        video_id = v.get("videoId") or v.get("video_id")
+        if not video_id:
+            continue
+        thumbnails = v.get("thumbnail") or v.get("thumbnails") or None
+        if isinstance(thumbnails, dict):
+            thumbnails = [thumbnails]
+        normalized.append({
+            "video_id": video_id,
+            "title": v.get("title") or None,
+            "view_count": _safe_int(v.get("views") or v.get("view_count")),
+            "duration": v.get("duration") or None,
+            "published_time": v.get("public") or v.get("published_time") or None,
+            "thumbnails": thumbnails,
+        })
+
+    if not normalized:
+        return True
+
+    payload: Dict = {"channel_id": channel_id, "videos": normalized}
+    if channel_name:
+        payload["channel_name"] = channel_name
+
+    async with _make_client() as client:
+        try:
+            resp = await client.post("/internal/ingest/channel-videos", json=payload)
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.warning(f"ingest_channel_videos failed (channel_id={channel_id}): {e!r}")
+            return False
+
+
+async def ingest_playlists(
+    channel_id: str,
+    playlists: List[Dict],
+) -> bool:
+    normalized = []
+    for p in playlists:
+        playlist_id = p.get("playlistId") or p.get("playlist_id")
+        if not playlist_id:
+            continue
+        normalized.append({
+            "playlist_id": playlist_id,
+            "title": p.get("title") or "",
+            "thumbnail": p.get("thumbnail") or None,
+            "video_count": _safe_int(p.get("videoCount") or p.get("video_count")),
+        })
+
+    if not normalized:
+        return True
+
+    async with _make_client() as client:
+        try:
+            resp = await client.post("/internal/ingest/playlists", json={
+                "channel_id": channel_id,
+                "playlists": normalized,
+            })
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.warning(f"ingest_playlists failed (channel_id={channel_id}): {e!r}")
             return False
 
 

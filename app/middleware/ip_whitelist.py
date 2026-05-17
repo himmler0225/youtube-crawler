@@ -1,7 +1,7 @@
+import json
 import os
 from typing import Set, Optional
-from fastapi import Request, HTTPException, status
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Scope, Receive, Send
 from app.config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -41,73 +41,92 @@ WHITELIST_ENABLED = os.getenv("ENABLE_IP_WHITELIST", "false").lower() == "true"
 
 def is_ip_whitelisted(ip: str) -> bool:
     if not WHITELISTED_IPS:
-        return True  # No whitelist configured, allow all
+        return True
 
     return ip in WHITELISTED_IPS
 
 
 def is_service_whitelisted(service_name: Optional[str]) -> bool:
-    if not WHITELISTED_SERVICES:
-        return False
-
-    if not service_name:
+    if not WHITELISTED_SERVICES or not service_name:
         return False
 
     return service_name in WHITELISTED_SERVICES
 
 
-def get_client_ip(request: Request) -> str:
-    """Resolve real client IP, preferring X-Forwarded-For then X-Real-IP."""
-    forwarded_for = request.headers.get("X-Forwarded-For")  # format: "client, proxy1, proxy2"
+def _get_client_ip_from_scope(scope: Scope, headers: dict) -> str:
+    forwarded_for = headers.get(b"x-forwarded-for", b"").decode()
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
 
-    real_ip = request.headers.get("X-Real-IP")
+    real_ip = headers.get(b"x-real-ip", b"").decode()
     if real_ip:
         return real_ip.strip()
 
-    if request.client:
-        return request.client.host
+    client = scope.get("client")
+    if client:
+        return client[0]
 
     return "unknown"
 
 
-class IPWhitelistMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+async def _send_403(send: Send) -> None:
+    body = json.dumps({"detail": "Access denied: IP address or service not whitelisted"}).encode()
+    await send({
+        "type": "http.response.start",
+        "status": 403,
+        "headers": [
+            [b"content-type", b"application/json"],
+            [b"content-length", str(len(body)).encode()],
+        ],
+    })
+    await send({"type": "http.response.body", "body": body, "more_body": False})
+
+
+class IPWhitelistMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         if not WHITELIST_ENABLED:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        if request.url.path == "/health":
-            return await call_next(request)
+        path = scope.get("path", "")
+        if path == "/health":
+            await self.app(scope, receive, send)
+            return
 
-        client_ip = get_client_ip(request)
-        service_name = request.headers.get("X-Service-Name")
-        service_token = request.headers.get("X-Service-Token")
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        client_ip = _get_client_ip_from_scope(scope, headers)
+        service_name = headers.get(b"x-service-name", b"").decode() or None
+        service_token = headers.get(b"x-service-token", b"").decode() or None
 
         if service_name and service_token:
             expected_token = os.getenv(f"SERVICE_TOKEN_{service_name.upper()}")
-            if expected_token and service_token == expected_token:
-                if is_service_whitelisted(service_name):
-                    logger.debug(f"Request from whitelisted service: {service_name}")
-                    return await call_next(request)
+            if expected_token and service_token == expected_token and is_service_whitelisted(service_name):
+                logger.debug(f"Request from whitelisted service: {service_name}")
+                await self.app(scope, receive, send)
+                return
 
         if is_ip_whitelisted(client_ip):
             logger.debug(f"Request from whitelisted IP: {client_ip}")
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         logger.warning(
-            f"Blocked request from non-whitelisted source",
+            "Blocked request from non-whitelisted source",
             extra={
                 "extra_data": {
                     "ip": client_ip,
                     "service": service_name,
-                    "path": request.url.path,
-                    "method": request.method,
+                    "path": path,
+                    "method": scope.get("method", ""),
                 }
-            }
+            },
         )
 
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: IP address or service not whitelisted"
-        )
+        await _send_403(send)

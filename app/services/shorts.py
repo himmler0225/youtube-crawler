@@ -61,6 +61,7 @@ def _parse_short(data: dict) -> Optional[dict]:
         "title": details.get("title", ""),
         "description": details.get("shortDescription", ""),
         "view_count": parse_view_count(details.get("viewCount", "")),
+        "channel_id": details.get("channelId") or None,
         "channel_name": details.get("author", ""),
         "duration": details.get("lengthSeconds"),
         "is_live": details.get("isLiveContent", False),
@@ -89,6 +90,7 @@ def _parse_short_from_replacement(data: dict) -> Optional[dict]:
         "title": "",
         "description": "",
         "view_count": 0,
+        "channel_id": None,
         "channel_name": "",
         "duration": None,
         "is_live": False,
@@ -126,9 +128,16 @@ def _parse_reel_item_renderer(item_type: str, item: dict) -> Optional[dict]:
         video_id = item.get("videoId")
         if not video_id:
             return None
-        title    = _extract_text(item.get("headline", {}))
-        views    = _extract_text(item.get("viewCountText", {}))
-        channel  = _extract_text(item.get("shortBylineText", {}))
+        title      = _extract_text(item.get("headline", {}))
+        views      = _extract_text(item.get("viewCountText", {}))
+        byline     = item.get("shortBylineText", {})
+        channel    = _extract_text(byline)
+        channel_id = (
+            byline.get("runs", [{}])[0]
+            .get("navigationEndpoint", {})
+            .get("browseEndpoint", {})
+            .get("browseId")
+        ) or None
         thumbnails = item.get("thumbnail", {}).get("thumbnails", [])
 
     elif item_type == "lockup":
@@ -140,10 +149,11 @@ def _parse_reel_item_renderer(item_type: str, item: dict) -> Optional[dict]:
         video_id = nav.get("videoId")
         if not video_id:
             return None
-        overlay  = item.get("overlayMetadata", {})
-        title    = overlay.get("primaryText", {}).get("content", "")
-        views    = overlay.get("secondaryText", {}).get("content", "")
-        channel  = ""
+        overlay    = item.get("overlayMetadata", {})
+        title      = overlay.get("primaryText", {}).get("content", "")
+        views      = overlay.get("secondaryText", {}).get("content", "")
+        channel    = ""
+        channel_id = None
         thumbnails = item.get("thumbnail", {}).get("image", {}).get("sources", [])
 
     else:
@@ -157,6 +167,7 @@ def _parse_reel_item_renderer(item_type: str, item: dict) -> Optional[dict]:
         "title": title,
         "description": "",
         "view_count": parse_view_count(views),
+        "channel_id": channel_id,
         "channel_name": channel,
         "duration": None,
         "is_live": False,

@@ -6,6 +6,7 @@ from app.services.location import get_videos_by_region
 from app.services.search import search_youtube
 from app.services.trending import get_trending_videos
 from app.services.shorts import get_shorts_feed
+from app.services.channel_enricher import enrich_channels_batch
 from app.exceptions import YouTubeStructureChangedError
 from app.config.logging_config import get_logger
 from app.config.urls import proxy_manager
@@ -159,6 +160,11 @@ async def crawl_shorts_videos():
 
         if videos:
             await ingest_client.ingest_shorts(videos=videos)
+
+            channel_ids = {v["channel_id"] for v in videos if v.get("channel_id")}
+            if channel_ids:
+                logger.info(f"[shorts] enriching {len(channel_ids)} channels in parallel")
+                await enrich_channels_batch(channel_ids, proxy=proxy)
 
         duration = (datetime.now() - start_time).total_seconds()
         _record_success(job_id)
