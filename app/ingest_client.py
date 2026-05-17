@@ -1,10 +1,4 @@
-"""
-Client gửi data crawl đến youtube-api qua internal HTTP API.
-
-Tất cả requests đều kèm header X-Service-Key để xác thực.
-Lỗi HTTP được log cảnh báo nhưng không raise — crawl vẫn tiếp tục
-dù ingest thất bại (data sẽ được crawl lại ở lần sau).
-"""
+# HTTP errors are caught and logged but never raised — crawl continues even if ingest fails.
 import os
 import httpx
 from typing import Dict, List, Optional
@@ -35,7 +29,6 @@ def _safe_int(value) -> Optional[int]:
 
 
 async def ingest_channel(data: ChannelInfo) -> bool:
-    """Gửi thông tin channel lên API. Trả về True nếu thành công."""
     async with _make_client() as client:
         try:
             resp = await client.post("/internal/ingest/channel", json=data)
@@ -51,7 +44,6 @@ async def ingest_search(
     videos: List[SearchVideo],
     sort: str = "relevance",
 ) -> bool:
-    """Gửi kết quả tìm kiếm. Trả về True nếu thành công."""
     valid_videos = [v for v in videos if v.get("video_id")]
     if not valid_videos:
         return True
@@ -71,11 +63,7 @@ async def ingest_detail(
     video_id: str,
     detail: dict,
 ) -> bool:
-    """
-    Gửi chi tiết video. `detail` là dict từ get_video_detail():
-    - Thành công: VideoDetail (có title, author, views...)
-    - Lỗi: VideoDetailError (có error=True, reason, status)
-    """
+    # detail has two shapes: error=True with reason, or full video fields.
     if detail.get("error"):
         payload = {
             "video_id": video_id,
@@ -106,7 +94,6 @@ async def ingest_trending(
     videos: List[Dict],
     category: Optional[str] = None,
 ) -> bool:
-    """Gửi danh sách video trending. Trả về True nếu thành công."""
     valid_videos = [v for v in videos if v.get("video_id")]
     if not valid_videos:
         return True
@@ -124,11 +111,43 @@ async def ingest_trending(
             return False
 
 
+async def ingest_shorts(videos: List[Dict]) -> bool:
+    normalized = []
+    for v in videos:
+        video_id = v.get("video_id")
+        if not video_id:
+            continue
+        raw_dur = v.get("duration")
+        try:
+            duration = int(raw_dur) if raw_dur is not None and raw_dur != "" else None
+        except (ValueError, TypeError):
+            duration = None
+        normalized.append({
+            "video_id": video_id,
+            "title": v.get("title") or None,
+            "channel_name": v.get("channel_name") or None,
+            "view_count": v.get("view_count") or None,
+            "duration": duration,
+            "thumbnails": v.get("thumbnails") or None,
+        })
+
+    if not normalized:
+        return True
+
+    async with _make_client() as client:
+        try:
+            resp = await client.post("/internal/ingest/shorts", json={"videos": normalized})
+            resp.raise_for_status()
+            return True
+        except Exception as e:
+            logger.warning(f"ingest_shorts failed: {e!r}")
+            return False
+
+
 async def ingest_comments(
     video_id: str,
     comments: List[Comment],
 ) -> bool:
-    """Gửi danh sách comment của video. Trả về True nếu thành công."""
     payload = {"video_id": video_id, "comments": comments}
 
     async with _make_client() as client:

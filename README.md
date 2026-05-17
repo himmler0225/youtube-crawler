@@ -1,6 +1,6 @@
 # youtube-crawler
 
-FastAPI service that fetches data from the YouTube internal API and pushes it to `youtube-api` for storage.
+FastAPI service that scrapes YouTube via the internal InnerTube API and pushes data to `youtube-api` for storage.
 
 ---
 
@@ -8,13 +8,15 @@ FastAPI service that fetches data from the YouTube internal API and pushes it to
 
 ```
 APScheduler (cron jobs)
-  ├── crawl_trending_videos()   → ingest_client → POST /internal/ingest/trending
-  ├── crawl_location_videos()   → ingest_client → POST /internal/ingest/search
-  └── crawl_popular_keywords()  → ingest_client → POST /internal/ingest/search
+  ├── crawl_trending_videos   → POST /internal/ingest/trending
+  ├── crawl_shorts_videos     → POST /internal/ingest/shorts
+  ├── crawl_location_videos   → POST /internal/ingest/search  (26 cities)
+  └── crawl_popular_keywords  → POST /internal/ingest/search
 
 youtube-api (real-time requests)
   ├── GET /api/video/:id               → services/detail.py
   ├── GET /api/video/:id/comments      → services/comment.py
+  ├── GET /api/videos/shorts           → services/shorts.py
   └── GET /api/videos/live             → services/live.py
 ```
 
@@ -25,43 +27,46 @@ youtube-api (real-time requests)
 ```
 app/
 ├── api/
-│   ├── routes.py                  # All FastAPI endpoints
-│   └── rate_limit_config.py       # Per-endpoint rate limit config
+│   ├── routes.py              # Public FastAPI endpoints (X-API-Key required)
+│   └── admin.py               # Admin endpoints: manual job triggers, proxy debug
 ├── config/
-│   ├── urls.py                    # Base URL + proxy config
-│   ├── headers.py                 # Randomized headers (User-Agent, viewport...)
-│   └── logging_config.py          # JSON logger — console, app.log, error.log
+│   ├── urls.py                # Base URLs + proxy manager
+│   ├── headers.py             # Randomised User-Agent, viewport headers
+│   ├── constants.py           # InnerTube endpoint names, filter params, sort codes
+│   └── logging_config.py      # JSON logger — console, app.log, error.log
 ├── middleware/
-│   ├── auth_middleware.py          # X-API-Key authentication
-│   ├── ip_whitelist.py             # IP whitelist + service token auth
-│   ├── rate_limit.py               # Rate limiting (slowapi)
-│   └── logging_middleware.py       # Request/response logging with requestId
+│   ├── auth.py                # verify_api_key FastAPI Depends
+│   ├── ip_whitelist.py        # IP whitelist + service token bypass
+│   ├── rate_limit.py          # slowapi limiter
+│   └── logging_middleware.py  # Request/response logging, X-Request-ID header
 ├── services/
-│   ├── detail.py                   # Single video detail (watch page + API fallback)
-│   ├── search.py                   # Video search + pagination
-│   ├── trending.py                 # Trending videos (scraped from HTML page)
-│   ├── live.py                     # Live streams
-│   ├── comment.py                  # Comments + replies
-│   ├── shorts.py                   # Shorts feed
-│   ├── channel.py                  # Channel videos
-│   ├── channel_info.py             # Channel metadata (avatar, banner, subscribers)
-│   ├── playlist.py                 # Channel playlists
-│   └── location.py                 # Region-targeted videos via gl/hl context
+│   ├── trending.py            # HTML scrape + search-by-view-count fallback
+│   ├── shorts.py              # Shorts feed
+│   ├── search.py              # Keyword search with continuation
+│   ├── live.py                # Live stream search
+│   ├── detail.py              # Single video detail
+│   ├── comment.py             # Comments + replies
+│   ├── channel.py             # Channel videos
+│   ├── channel_info.py        # Channel metadata
+│   ├── playlist.py            # Playlist videos
+│   └── location.py            # Region-targeted search via gl/hl
 ├── scheduler/
-│   ├── scheduler.py                # APScheduler singleton lifecycle
-│   ├── config.py                   # Job schedules (cron triggers, env vars)
-│   └── jobs.py                     # Job implementations (retry, circuit breaker)
-├── ingest_client.py                # HTTP client that pushes data to youtube-api
-├── exceptions.py                   # YouTubeStructureChangedError, CrawlNetworkError
-├── types.py                        # TypedDicts for all data structures
-└── utils.py                        # httpx client, proxy config, helpers
+│   ├── scheduler.py           # APScheduler singleton
+│   ├── config.py              # Job registration (cron triggers, env overrides)
+│   └── jobs.py                # Job implementations (retry, circuit breaker, batch)
+├── ingest_client.py           # HTTP client → POST /internal/ingest/*
+├── exceptions.py              # YouTubeStructureChangedError, CrawlNetworkError
+├── types.py                   # TypedDicts for all data shapes
+└── utils.py                   # httpx client factory, proxy helpers, parse_view_count
 ```
+
+See `README.md` inside each subdirectory for flow details.
 
 ---
 
 ## API Endpoints
 
-All endpoints require the `X-API-Key` header.
+All endpoints require `X-API-Key` header.
 
 | Method | Path | Params | Description |
 |--------|------|--------|-------------|
@@ -76,70 +81,64 @@ All endpoints require the `X-API-Key` header.
 | GET | `/api/channel/{channel_id}/videos` | `page`, `limit` | Channel videos |
 | GET | `/api/channel/{channel_id}/playlists` | — | Channel playlists |
 | GET | `/api/playlist/{playlist_id}/videos` | — | Playlist videos |
-| GET | `/health` | — | Health check |
 
-### `/api/videos/location` examples
-
-```
-GET /api/videos/location?gl=VN&hl=vi&query=Hanoi
-GET /api/videos/location?gl=JP&hl=ja&query=東京&max_results=30
-```
-
-> The YouTube internal API does not support lat/lng parameters. Geographic targeting is done via the `gl` country code in the InnerTube request context.
+> Geographic targeting uses the `gl` country code in the InnerTube request context, not lat/lng (YouTube ignores lat/lng).
 
 ---
 
 ## Scheduled Jobs
 
-| Job | Cron | Description |
-|-----|------|-------------|
-| `crawl_trending_videos` | `0 7 * * *` | Top 100 trending → ingest/trending |
-| `crawl_location_videos` | `0 6 * * *` | 26 regions (gl/hl) → ingest/search |
-| `crawl_popular_keywords` | `0 8 * * *` | Fixed keyword list → ingest/search |
-| `cleanup_old_data` | `0 2 * * 0` | Weekly data cleanup |
-| `health_check_job` | every 60 min | System health check |
+| Job | Default cron | Output |
+|-----|-------------|--------|
+| `crawl_trending_videos` | `0 7 * * *` | Top 100 trending → `ingest/trending` |
+| `crawl_shorts_videos` | `0 9 * * *` | Shorts feed → `ingest/shorts` |
+| `crawl_location_videos` | `0 6 * * *` | 26 cities (gl/hl) → `ingest/search` |
+| `crawl_popular_keywords` | `0 8 * * *` | Fixed keyword list → `ingest/search` |
+| `cleanup_old_data` | `0 2 * * 0` | Weekly cleanup (placeholder) |
+| `health_check_job` | every 60 min | System ping |
 
-All jobs have retry logic (linear backoff, 3 attempts) and a circuit breaker that stops after 5 consecutive failures and resets after 1 hour.
+**Resilience:** 3-attempt linear backoff retry per job. Circuit breaker trips after 5 consecutive failures — job skips until app restart. `YouTubeStructureChangedError` bypasses retry and trips circuit immediately.
 
 ---
 
-## Middleware stack (in order)
+## Middleware stack
 
-1. `IPWhitelistMiddleware` — blocks unlisted IPs (can be disabled via env)
-2. `LoggingMiddleware` — logs every request/response with requestId and duration
-3. `AuthMiddleware` — validates `X-API-Key`
-4. `RateLimitMiddleware` — rate limits per API key or IP
+Applied in order (Starlette registers in reverse):
+
+1. `RateLimitMiddleware` — per-key or per-IP rate limiting
+2. `AuthMiddleware` — validates `X-API-Key`
+3. `LoggingMiddleware` — logs every request with duration + `X-Request-ID`
+4. `IPWhitelistMiddleware` — blocks unlisted IPs (disabled by default)
 
 ---
 
 ## Environment variables
 
 ```env
-# Server
 PORT=8000
 
-# API Authentication
-API_KEYS=key1,key2              # Comma-separated list of valid API keys
+# API auth
+API_KEYS=key1,key2
 
-# IP Whitelist
-IP_WHITELIST=                   # e.g. 127.0.0.1,10.0.0.1
+# IP whitelist
+IP_WHITELIST=
 IP_WHITELIST_ENABLED=false
-
-# Service auth (between internal services)
 SERVICE_TOKENS=name:token
 
-# Proxy (optional)
+# Proxy (optional, residential proxy improves trending HTML success rate)
 PROXY_URL=
+PROXY_KEYS=                     # comma-separated keys for rotating proxy provider
 
 # Scheduler
 ENABLE_SCHEDULER=true
 TRENDING_CRON=0 7 * * *
+SHORTS_CRON=0 9 * * *
 LOCATION_CRON=0 6 * * *
 KEYWORDS_CRON=0 8 * * *
 CLEANUP_CRON=0 2 * * 0
 HEALTH_CHECK_INTERVAL=60        # minutes
 
-# Ingest (push to youtube-api)
+# Ingest target
 INGEST_API_URL=http://localhost:3000
 INGEST_SERVICE_KEY=             # must match INTERNAL_SERVICE_KEY in youtube-api
 ```

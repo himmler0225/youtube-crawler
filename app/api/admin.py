@@ -7,6 +7,7 @@ from app.config import get_youtube_headers, get_youtube_api_url
 from app.config.constants import ENDPOINT_SEARCH, SEARCH_FILTER_LOCATION
 from app.scheduler.jobs import (
     crawl_trending_videos,
+    crawl_shorts_videos,
     crawl_location_videos,
     crawl_popular_keywords,
     cleanup_old_data,
@@ -138,6 +139,18 @@ async def trigger_trending(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(_run)
     return {"status": "started", "job": "crawl_trending"}
+
+
+@router.post("/jobs/shorts")
+async def trigger_shorts(background_tasks: BackgroundTasks):
+    if "crawl_shorts" in _running_jobs:
+        return {"status": "already_running", "job": "crawl_shorts"}
+
+    async def _run():
+        await _run_job("crawl_shorts", crawl_shorts_videos)
+
+    background_tasks.add_task(_run)
+    return {"status": "started", "job": "crawl_shorts"}
 
 
 @router.post("/jobs/location")

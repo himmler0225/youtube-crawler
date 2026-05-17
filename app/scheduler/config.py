@@ -4,6 +4,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.scheduler.scheduler import get_scheduler
 from app.scheduler.jobs import (
     crawl_trending_videos,
+    crawl_shorts_videos,
     crawl_location_videos,
     crawl_popular_keywords,
     cleanup_old_data,
@@ -18,7 +19,6 @@ def configure_jobs():
     scheduler = get_scheduler()
 
     enable_scheduler = os.getenv("ENABLE_SCHEDULER", "true").lower() == "true"
-
     if not enable_scheduler:
         logger.info("Scheduler is disabled via ENABLE_SCHEDULER env var")
         return
@@ -33,6 +33,17 @@ def configure_jobs():
         max_instances=1,
     )
     logger.info(f"Scheduled job: Crawl Trending Videos (cron: {trending_schedule})")
+
+    shorts_schedule = os.getenv("SHORTS_CRON", "0 9 * * *")
+    scheduler.add_job(
+        crawl_shorts_videos,
+        trigger=CronTrigger.from_crontab(shorts_schedule),
+        id="crawl_shorts",
+        name="Crawl Shorts Feed",
+        replace_existing=True,
+        max_instances=1,
+    )
+    logger.info(f"Scheduled job: Crawl Shorts Feed (cron: {shorts_schedule})")
 
     location_schedule = os.getenv("LOCATION_CRON", "0 6 * * *")
     scheduler.add_job(
@@ -83,4 +94,3 @@ def configure_jobs():
         next_run = getattr(job, "next_run_time", None)
         next_run_str = next_run.isoformat() if next_run else "N/A"
         logger.info(f"  - {job.name} (ID: {job.id}, Next run: {next_run_str})")
-
